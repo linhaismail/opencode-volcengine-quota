@@ -103,7 +103,11 @@ async function fetchOneAccount(
   const args = [bin, "usage", "plan", "--format", "json"]
   if (spec.profile) args.push("--profile", spec.profile)
   const env: Record<string, string | undefined> = { ...Bun.env, ARKCLI_NO_UPDATE_NOTIFIER: "1" }
-  if (spec.home) env.HOME = spec.home
+  if (spec.home) {
+    env.HOME = spec.home
+    // Windows: the arkcli binary reads USERPROFILE (os.homedir), not HOME.
+    if (process.platform === "win32") env.USERPROFILE = spec.home
+  }
 
   const proc = Bun.spawn(args, { stdout: "pipe", stderr: "pipe", env })
   const timer = setTimeout(() => proc.kill(), timeoutMs)
