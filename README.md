@@ -65,6 +65,14 @@ mkdir -p ~/.arkcli-b
 HOME=~/.arkcli-b arkcli auth login volc-sso   # log into the 2nd account
 ```
 
+**Windows (PowerShell):** `arkcli` is a compiled binary and resolves its config dir from `USERPROFILE` (Node's `os.homedir()`), **not** `HOME`. Set `USERPROFILE` in the same terminal session:
+
+```powershell
+New-Item -ItemType Directory -Force -Path "$HOME\.arkcli-b"
+$env:USERPROFILE = "$HOME\.arkcli-b"
+arkcli auth login volc-sso   # log into the 2nd account
+```
+
 Then reference the sandbox in `volcengine-quota.json`:
 
 ```jsonc
@@ -76,7 +84,9 @@ Then reference the sandbox in `volcengine-quota.json`:
 }
 ```
 
-Repeat for account C, D, … with a fresh HOME each time. When an account's STS expires, re-run its `HOME=... arkcli auth login volc-sso`.
+On Windows, use the same path style for `home` (e.g. `C:\Users\you\.arkcli-b`).
+
+Repeat for account C, D, … with a fresh HOME each time. When an account's STS expires, re-run its `HOME=... arkcli auth login volc-sso` (Windows: `$env:USERPROFILE = ...`).
 
 ## Troubleshooting
 
