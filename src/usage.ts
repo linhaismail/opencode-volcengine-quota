@@ -43,6 +43,8 @@ export interface AccountSpec {
 export interface AccountUsage extends AccountSpec {
   label: string
   plans: PlanUsage[]
+  /** Per-account fetch error (arkcli failed / not authenticated). Present ⇒ this account failed and plans is empty. */
+  error?: string
 }
 
 export interface UsageData {
@@ -72,11 +74,11 @@ interface ArkPlanOutput {
 
 /** Map an arkcli period label to a stable window key + display label.
  *  AgentPlan reports "5h"; CodingPlan reports "session". Both are the short
- *  rolling window — keep each product's own label for accuracy. */
+ *  rolling window — normalize both to the "5h" label for a consistent look. */
 function windowKey(raw: string | undefined): { key: WindowKey; label: string } | null {
   const s = (raw ?? "").trim().toLowerCase()
   if (s === "5h") return { key: "session", label: "5h" }
-  if (s === "session") return { key: "session", label: "session" }
+  if (s === "session") return { key: "session", label: "5h" }
   if (s === "weekly") return { key: "weekly", label: "1W" }
   if (s === "monthly") return { key: "monthly", label: "1M" }
   return null
@@ -91,76 +93,100 @@ const ORDER: WindowKey[] = ["session", "weekly", "monthly"]
  * account in parallel, and normalizes each subscribed item's periods into
  * windows. Team SKUs with empty periods are dropped.
  */
+/** Run `arkcli usage plan` for one identity and normalize its plans. Throws UsageError on any failure. */
+async function fetchOneAccount(
+  bin: string,
+  spec: AccountSpec,
+  timeoutMs: number,
+  excludeProducts?: string[],
+): Promise<PlanUsage[]> {
+  const args = [bin, "usage", "plan", "--format", "json"]
+  if (spec.profile) args.push("--profile", spec.profile)
+  const env: Record<string, string | undefined> = { ...Bun.env, ARKCLI_NO_UPDATE_NOTIFIER: "1" }
+  if (spec.home) env.HOME = spec.home
+
+  const proc = Bun.spawn(args, { stdout: "pipe", stderr: "pipe", env })
+  const timer = setTimeout(() => proc.kill(), timeoutMs)
+  let stdout = ""
+  let stderr = ""
+  let exitCode = -1
+  try {
+    stdout = await new Response(proc.stdout).text()
+    stderr = await new Response(proc.stderr).text()
+    exitCode = await proc.exited
+  } catch (e) {
+    throw new UsageError(`failed to run ${bin}: ${(e as Error).message}`)
+  } finally {
+    clearTimeout(timer)
+  }
+
+  if (exitCode !== 0) {
+    const hint = stderr.trim().split("\n").pop() ?? ""
+    throw new UsageError(
+      `${bin} exited ${exitCode}${hint ? `: ${hint}` : " (not installed or not authenticated?)"}`,
+    )
+  }
+
+  let parsed: ArkPlanOutput
+  try {
+    parsed = JSON.parse(stdout) as ArkPlanOutput
+  } catch {
+    throw new UsageError(`could not parse ${bin} JSON output`)
+  }
+
+  const plans: PlanUsage[] = []
+  for (const item of parsed.items ?? []) {
+    if (item.subscribed === false) continue
+    if (excludeProducts?.includes(item.product ?? "")) continue
+    const rawPeriods = item.periods ?? []
+    if (rawPeriods.length === 0) continue // e.g. team SKUs without quota
+    const byKey = new Map<WindowKey, UsageWindow>()
+    for (const p of rawPeriods) {
+      const w = windowKey(p.label)
+      if (!w) continue
+      byKey.set(w.key, {
+        key: w.key,
+        label: w.label,
+        percent: clampPercent(p.percent ?? 0),
+        resetAt: p.reset_at,
+      })
+    }
+    const windows = ORDER.filter((k) => byKey.has(k)).map((k) => byKey.get(k)!)
+    if (windows.length === 0) continue
+    plans.push({ product: item.product ?? "unknown", edition: item.edition, tier: item.tier, windows })
+  }
+  return plans
+}
+
 export async function fetchAllUsage(
   options: {
     bin?: string
     timeoutMs?: number
     accounts: AccountSpec[]
+    excludeProducts?: string[]
   } = { accounts: [] },
 ): Promise<UsageData> {
   const bin = options.bin ?? "arkcli"
   const timeoutMs = options.timeoutMs ?? 20000
   const accounts = options.accounts.length > 0 ? options.accounts : [{}]
 
+  // Per-account fault isolation: one dead identity (e.g. expired STS) must not
+  // blank the whole widget — it becomes an account-level error instead.
   const results = await Promise.all(
     accounts.map(async (spec) => {
       const label = spec.label ?? spec.home ?? "default"
-      const args = [bin, "usage", "plan", "--format", "json"]
-      if (spec.profile) args.push("--profile", spec.profile)
-      const env: Record<string, string | undefined> = { ...Bun.env, ARKCLI_NO_UPDATE_NOTIFIER: "1" }
-      if (spec.home) env.HOME = spec.home
-
-      const proc = Bun.spawn(args, { stdout: "pipe", stderr: "pipe", env })
-      const timer = setTimeout(() => proc.kill(), timeoutMs)
-      let stdout = ""
-      let stderr = ""
-      let exitCode = -1
       try {
-        stdout = await new Response(proc.stdout).text()
-        stderr = await new Response(proc.stderr).text()
-        exitCode = await proc.exited
+        const plans = await fetchOneAccount(bin, spec, timeoutMs, options.excludeProducts)
+        return { label, home: spec.home, profile: spec.profile, plans }
       } catch (e) {
-        throw new UsageError(`failed to run ${bin}: ${(e as Error).message}`)
-      } finally {
-        clearTimeout(timer)
-      }
-
-      if (exitCode !== 0) {
-        const hint = stderr.trim().split("\n").pop() ?? ""
-        throw new UsageError(
-          `${bin} exited ${exitCode}${hint ? `: ${hint}` : " (not installed or not authenticated?)"}`,
-        )
-      }
-
-      let parsed: ArkPlanOutput
-      try {
-        parsed = JSON.parse(stdout) as ArkPlanOutput
-      } catch {
-        throw new UsageError(`could not parse ${bin} JSON output`)
-      }
-
-      const plans: PlanUsage[] = []
-      for (const item of parsed.items ?? []) {
-        if (item.subscribed === false) continue
-        const rawPeriods = item.periods ?? []
-        if (rawPeriods.length === 0) continue // e.g. team SKUs without quota
-        const byKey = new Map<WindowKey, UsageWindow>()
-        for (const p of rawPeriods) {
-          const w = windowKey(p.label)
-          if (!w) continue
-          byKey.set(w.key, {
-            key: w.key,
-            label: w.label,
-            percent: clampPercent(p.percent ?? 0),
-            resetAt: p.reset_at,
-          })
+        return {
+          label,
+          home: spec.home,
+          profile: spec.profile,
+          plans: [],
+          error: e instanceof UsageError ? e.message : String(e),
         }
-        const windows = ORDER.filter((k) => byKey.has(k)).map((k) => byKey.get(k)!)
-        if (windows.length === 0) continue
-        plans.push({ product: item.product ?? "unknown", edition: item.edition, tier: item.tier, windows })
       }
-
-      return { label, home: spec.home, profile: spec.profile, plans }
     }),
   )
 
