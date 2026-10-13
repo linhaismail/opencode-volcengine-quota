@@ -47,6 +47,8 @@ export interface AccountSpec {
 export interface AccountUsage extends AccountSpec {
   label: string
   plans: PlanUsage[]
+  /** Volc account / user id from `viewer.user_id`, shown to tell accounts apart. */
+  userId?: string
   /** Per-account fetch error (arkcli failed / not authenticated). Present ⇒ this account failed and plans is empty. */
   error?: string
 }
@@ -72,7 +74,15 @@ interface ArkItem {
   periods?: ArkPeriod[]
 }
 
+/** Identity block reported by `arkcli usage plan`; `user_id` is the Volc account. */
+interface ArkViewer {
+  user_id?: string
+  account_id?: string
+  user_name?: string
+}
+
 interface ArkPlanOutput {
+  viewer?: ArkViewer
   items?: ArkItem[]
 }
 
@@ -103,7 +113,7 @@ async function fetchOneAccount(
   spec: AccountSpec,
   timeoutMs: number,
   excludeProducts?: string[],
-): Promise<PlanUsage[]> {
+): Promise<{ plans: PlanUsage[]; userId?: string }> {
   const args = [bin, "usage", "plan", "--format", "json"]
   if (spec.profile) args.push("--profile", spec.profile)
   const env: Record<string, string | undefined> = { ...Bun.env, ARKCLI_NO_UPDATE_NOTIFIER: "1" }
@@ -163,7 +173,8 @@ async function fetchOneAccount(
     if (windows.length === 0) continue
     plans.push({ product: item.product ?? "unknown", edition: item.edition, tier: item.tier, windows })
   }
-  return plans
+  const userId = parsed.viewer?.user_id ?? parsed.viewer?.account_id
+  return { plans, userId }
 }
 
 export async function fetchAllUsage(
@@ -184,8 +195,8 @@ export async function fetchAllUsage(
     accounts.map(async (spec) => {
       const label = spec.label ?? spec.home ?? "default"
       try {
-        const plans = await fetchOneAccount(bin, spec, timeoutMs, options.excludeProducts)
-        return { label, home: spec.home, profile: spec.profile, plans }
+        const { plans, userId } = await fetchOneAccount(bin, spec, timeoutMs, options.excludeProducts)
+        return { label, home: spec.home, profile: spec.profile, plans, userId }
       } catch (e) {
         return {
           label,

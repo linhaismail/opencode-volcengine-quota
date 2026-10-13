@@ -8,6 +8,7 @@ OpenCode V2 sidebar widget for **Volcengine Ark** plans: live plan-quota bars fo
 - **Multi-account aggregation** — every Volc engine account is one `arkcli` identity; the panel lists all of them with their subscribed plans side by side.
 - **Auto-discovery** — each account runs one `arkcli usage plan` call (no `--product`) that returns every subscribed SKU (agent-plan + coding-plan) automatically.
 - **Collapsible** — click an account or plan header to collapse it; state persists across restarts.
+- **Account id in header** — each account header appends its Volc account id (from `arkcli usage plan`'s `viewer.user_id`), so multiple accounts are easy to tell apart at a glance.
 - **One-click re-login** — when an account's credentials expire, a `⇄ login` button appears under it; click it to open the interactive `arkcli auth login volc-sso` in a fresh terminal window (the browser opens automatically). The widget then polls and auto-recovers once login completes.
 
 ## Prerequisites
@@ -155,10 +156,16 @@ typechecks, and publishes:
 ./publish.sh major    # major: 1.0.0 → 2.0.0
 ./publish.sh 1.2.3    # exact version
 ./publish.sh --dry-run  # sync only, no bump / publish
+./publish.sh pull       # git pull, then sync src/ -> live plugin dir
 ```
 
 The local plugin is the single source of truth — `publish.sh` always copies
 from `~/.config/opencode/plugins/volcengine-quota/` before publishing.
+
+To make an **upstream PR take effect locally**, use `./publish.sh pull`: it
+runs `git pull`, backs up any local-only plugin edits (to a temp dir, so they
+are never silently lost), then copies `src/` back into the live plugin
+directory — the reverse of the publish direction.
 
 ### Manual build
 

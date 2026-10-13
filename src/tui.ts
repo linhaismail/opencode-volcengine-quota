@@ -169,6 +169,10 @@ export default Plugin.define({
       }, 8000)
     }
 
+    // Account header text: append the Volc user id so multiple accounts are
+    // distinguishable in the panel.
+    const accountTitle = (label: string, userId?: string) => (userId ? `${label}  (${userId})` : label)
+
     const slot = context.ui.slot({
       after: "sidebar.content",
       render: (input: { sessionID?: string }) => {
@@ -199,7 +203,7 @@ export default Plugin.define({
                     fg: isActiveAcc ? accent : theme.text.muted,
                     onMouseDown: () => toggleAccount(acc.label),
                   },
-                  [`${accCollapsed ? "▶" : "▼"} ${acc.label}  ✕`],
+                  [`${accCollapsed ? "▶" : "▼"} ${accountTitle(acc.label, acc.userId)}  ✕`],
                 ),
               )
               if (!accCollapsed) {
@@ -231,7 +235,7 @@ export default Plugin.define({
                   fg: isActiveAcc ? accent : theme.text.muted,
                   onMouseDown: () => toggleAccount(acc.label),
                 },
-                [`${accCollapsed ? "▶" : "▼"} ${acc.label}`],
+                [`${accCollapsed ? "▶" : "▼"} ${accountTitle(acc.label, acc.userId)}`],
               ),
             )
             if (accCollapsed) continue
