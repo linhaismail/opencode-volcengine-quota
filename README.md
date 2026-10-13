@@ -8,6 +8,7 @@ OpenCode V2 sidebar widget for **Volcengine Ark** plans: live plan-quota bars fo
 - **Multi-account aggregation** — every Volc engine account is one `arkcli` identity; the panel lists all of them with their subscribed plans side by side.
 - **Auto-discovery** — each account runs one `arkcli usage plan` call (no `--product`) that returns every subscribed SKU (agent-plan + coding-plan) automatically.
 - **Collapsible** — click an account or plan header to collapse it; state persists across restarts.
+- **One-click re-login** — when an account's credentials expire, a `⇄ login` button appears under it; click it to open the interactive `arkcli auth login volc-sso` in a fresh terminal window (the browser opens automatically). The widget then polls and auto-recovers once login completes.
 
 ## Prerequisites
 
@@ -121,9 +122,9 @@ Repeat for account C, D, … with a fresh HOME each time. When an account's STS 
 | Symptom | Fix |
 |---|---|
 | Panel shows `ark ✕ not configured` | `arkcli` not logged in for that identity/HOME |
-| An account shows no plans | That identity has no subscribed plan, or STS expired (re-login) |
+| An account shows `✕` + a `⇄ login` button | That identity's STS expired or is not authenticated — click `⇄ login` to re-authenticate in a fresh terminal window |
 | Missing `5h`/`session` row | Out of date? Refresh with `↻`; reinstall latest |
-| Multi-account panel errors | Re-run `HOME=<sandbox> arkcli auth login volc-sso` |
+| Multi-account panel errors | Click `⇄ login` on the failed account, or re-run `HOME=<sandbox> arkcli auth login volc-sso` |
 
 ## Development
 

@@ -4,7 +4,7 @@ import { createElement, setProp, insert } from "@opentui/solid"
 import { readFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
-import { fetchAllUsage, bar, formatCountdown, UsageError, type AccountSpec, type UsageData } from "./usage"
+import { fetchAllUsage, openLogin, bar, formatCountdown, UsageError, type AccountSpec, type UsageData } from "./usage"
 
 type Child = string | number | boolean | null | undefined | object | (() => Child)
 
@@ -140,6 +140,35 @@ export default Plugin.define({
     const poll = setInterval(() => void refresh(), options.pollMs)
     const tick = setInterval(() => setNow(Date.now()), 1000)
 
+    // Accounts with a login window currently open (SSO in progress), keyed by label.
+    const [loggingIn, setLoggingIn] = createSignal<Record<string, boolean>>({})
+
+    // Open the interactive SSO login for an account in a fresh terminal window,
+    // then poll until its quota fetch recovers or a timeout is reached.
+    const startLogin = async (spec: AccountSpec) => {
+      const label = spec.label ?? spec.home ?? "default"
+      if (loggingIn()[label]) return
+      setLoggingIn((m) => ({ ...m, [label]: true }))
+      try {
+        await openLogin({ bin: options.bin, account: spec })
+      } catch (e) {
+        setError(e instanceof UsageError ? e.message : String(e))
+        setLoggingIn((m) => ({ ...m, [label]: false }))
+        return
+      }
+      // SSO usually takes a few seconds to a minute; poll every 8s, up to ~3min.
+      let tries = 0
+      const timer = setInterval(async () => {
+        tries += 1
+        await refresh()
+        const acc = data()?.accounts.find((a) => a.label === label)
+        if ((acc && !acc.error) || tries > 25) {
+          clearInterval(timer)
+          setLoggingIn((m) => ({ ...m, [label]: false }))
+        }
+      }, 8000)
+    }
+
     const slot = context.ui.slot({
       after: "sidebar.content",
       render: (input: { sessionID?: string }) => {
@@ -179,6 +208,18 @@ export default Plugin.define({
                   text({ fg: theme.text.feedback.error.base }, [
                     `  ✕ ${errLine.length > 64 ? `${errLine.slice(0, 64)}…` : errLine}`,
                   ]),
+                )
+                const isLogging = loggingIn()[acc.label]
+                rows.push(
+                  text(
+                    {
+                      fg: theme.text.base,
+                      onMouseDown: isLogging
+                        ? undefined
+                        : () => startLogin({ label: acc.label, home: acc.home, profile: acc.profile }),
+                    },
+                    [isLogging ? "  ⟳ logging in…" : "  ⇄ login"],
+                  ),
                 )
               }
               continue

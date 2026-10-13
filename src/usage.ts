@@ -11,6 +11,10 @@
  * and are skipped.
  */
 
+import { writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+
 export type WindowKey = "session" | "weekly" | "monthly"
 
 export interface UsageWindow {
@@ -195,6 +199,78 @@ export async function fetchAllUsage(
   )
 
   return { accounts: results, updatedAt: Date.now() }
+}
+
+/**
+ * Open the interactive SSO login for one arkcli identity in a real terminal
+ * window.
+ *
+ * `arkcli auth login volc-sso` only auto-opens the browser and completes the
+ * flow when stdin is an interactive TTY; spawned from the TUI process it
+ * detects a non-interactive terminal, prints an `authorize_url` and exits
+ * immediately (the user would then have to paste a code back). So instead of
+ * spawning it inline, we launch a fresh terminal window — Windows: a new cmd
+ * window via a temp .cmd script; macOS: a Terminal tab; Linux: a common
+ * terminal emulator — where the interactive login runs as if typed by hand:
+ * the browser opens, the user authorizes, credentials land in the account's
+ * config dir. Callers should poll `fetchAllUsage` afterwards until the
+ * account's `error` clears.
+ */
+export async function openLogin(options: { bin?: string; account?: AccountSpec } = {}): Promise<void> {
+  const bin = options.bin ?? "arkcli"
+  const spec = options.account
+  const home = spec?.home
+  const profile = spec?.profile
+  const loginArgs = [bin, "auth", "login", "volc-sso", ...(profile ? ["--profile", profile] : [])]
+  const loginLine = loginArgs.map(q).join(" ")
+
+  if (process.platform === "win32") {
+    // cmd has its own quote parsing and Bun also escapes embedded quotes when
+    // spawning on Windows, so an inline `start "Title" cmd /k "..."` is
+    // unreliable (start ends up treating the title as the program). Instead we
+    // write a temp .cmd script — the quoting lives inside the file, untouched
+    // by Bun — set HOME/USERPROFILE in it (inherited by the new window's cmd),
+    // and hand cmd /c nothing but the script path.
+    const lines = ["@echo off"]
+    if (home) {
+      lines.push(`set "HOME=${home}"`)
+      lines.push(`set "USERPROFILE=${home}"`)
+    }
+    // `start` opens a new console window; `cmd /k` keeps it open after login so
+    // the user sees the result (and any error) and can close it.
+    lines.push(`start "Volcengine Ark SSO login" cmd /k ${loginLine}`)
+    const safeLabel = (spec?.label ?? "default").replace(/[^\w.-]+/g, "_")
+    const scriptPath = join(tmpdir(), `opencode-volcengine-quota-login-${safeLabel}.cmd`)
+    writeFileSync(scriptPath, lines.join("\r\n") + "\r\n", "utf8")
+    Bun.spawn(["cmd", "/d", "/c", scriptPath], {
+      stdin: "ignore",
+      stdout: "ignore",
+      stderr: "ignore",
+    })
+    return
+  }
+
+  if (process.platform === "darwin") {
+    const env = home ? `HOME=${q(home)} ` : ""
+    const script = `tell application "Terminal"\n  do script "${`${env}${loginLine}; exit`.replace(/"/g, '\\"')}"\n  activate\nend tell`
+    Bun.spawn(["osascript", "-e", script], { stdin: "ignore", stdout: "ignore", stderr: "ignore" })
+    return
+  }
+
+  // Linux / other: try a common terminal emulator, falling back to running the
+  // login inline (it degrades to a printed authorize_url if stdin is not a TTY).
+  const env = home ? `HOME=${q(home)} ` : ""
+  const term = process.env.TERMINAL || "x-terminal-emulator"
+  Bun.spawn([term, "-e", "bash", "-lc", `${env}${loginLine}; exec bash`], {
+    stdin: "ignore",
+    stdout: "ignore",
+    stderr: "ignore",
+  })
+}
+
+/** Wrap a shell word in double quotes when it contains whitespace or shell metacharacters. */
+function q(word: string): string {
+  return /[\s"&|<>^%]/.test(word) ? `"${word}"` : word
 }
 
 export function clampPercent(value: number): number {
